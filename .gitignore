@@ -1,0 +1,17 @@
+# secrets — never commit
+secrets.local.env
+loadsecrets.ps1
+*.key
+*.pem
+.env
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
