@@ -32,6 +32,25 @@ The question I wanted to answer: *can an AI agent drive this closed legacy syste
 2. **Abstraction** — collapsed scattered API behavior into a small set of **stable, programmable actions**: form create / read / update / deploy / clone, plus the underlying data-source subsystem. The hard part isn't calling it once — it's nailing every action's preconditions, side effects, and irreversible operations so automation doesn't blow up at the edges.
 3. **Agent-ification** — exposed those actions as an **MCP toolchain** ([`mcp_server_skeleton.py`](./mcp_server_skeleton.py)) so any MCP-capable agent (e.g. Claude) can build a real, deployable form from a natural-language instruction.
 
+### Architecture
+
+```mermaid
+flowchart LR
+    Agent["AI Agent<br/>(e.g. Claude)"]
+    MCP["MCP server<br/>(eip-form-mcp)"]
+    Client["API client<br/>single auth choke point"]
+    Sys["Undocumented<br/>BPM form system"]
+
+    Agent -->|"natural-language intent"| MCP
+    MCP -->|"form_create / read / update<br/>deploy / clone / list"| Client
+    Client -->|"signed request"| Sys
+    Sys -.->|"execution-verified result"| Client
+    Client -.-> MCP
+    MCP -.-> Agent
+```
+
+Two ideas carry the design: a **single auth choke point** (every verb is a thin wrapper over one signing function) and **execution-verified results** (a write isn't "done" until its effect is confirmed by running it).
+
 ### The 6 core tools
 
 | Tool | What it does |
@@ -44,6 +63,32 @@ The question I wanted to answer: *can an AI agent drive this closed legacy syste
 | `form_clone`  | Clone an existing form as a template |
 
 The same pattern extends to the data-source subsystem (list / read / create).
+
+### Example: an agent building a form
+
+> **Intent:** *"Clone our standard approval template into a Leave Request form, add a reason and days field, then deploy it."*
+
+The agent turns that one sentence into a tool sequence:
+
+1. `form_clone` — copy the standard template
+2. `form_update` — add the leave-specific fields
+3. `form_deploy` — make it live
+
+One instruction → a deployed form, with the agent never touching the back-office UI. Run it end-to-end against the mock backend:
+
+```bash
+python examples/demo.py
+```
+
+### Field notes: reverse-engineering an undocumented system
+
+The transferable part — system specifics abstracted away, engineering judgment kept:
+
+- **Find the one choke point that unlocks the surface.** The system signed every request with a token computed on the client. Once I located and reproduced that, every API verb became a thin wrapper over a single signing function. The highest-leverage move in reverse-engineering is finding the choke point — not grinding every endpoint.
+- **Trust execution, not status codes.** A "save" could return `200 OK` and silently do nothing — the value the UI displayed and the value the engine actually ran lived in different places. So I verify every write by executing it and checking the real output. In an undocumented system, the success signal you're handed may be a lie.
+- **Capture the protocol; never assume it.** I assumed object IDs could be client-generated. They couldn't — a self-minted ID never routed. The only oracle for an undocumented protocol is captured real traffic, aligned byte-for-byte.
+- **Guard the irreversible before automating it.** Some objects could be created but never deleted. So: throwaway test fixtures, a dry-run preview on every write, and a confirmation gate in front of any create — built *before* turning automation loose.
+- **A methodology is only real if someone else can reproduce it.** I had a cold-start agent rebuild the integration from my notes alone — twice, forbidden from reading my solution — to prove the *method* was complete, not just the result. (The same player-vs-referee discipline I apply to evals.)
 
 ### Why this maps to "AI Agent Engineer"
 
@@ -106,6 +151,25 @@ The skeleton runs against an in-memory mock backend — no live system required.
 2. **抽象**——把散落的 API 行為收斂成一組**穩定、可程式化呼叫的動作**：表單建立／讀取／修改／部署／複製，加上底層資料來源子系統。難的不是「呼叫一次」，是摸清每個動作的前置條件、副作用、不可逆操作，自動化才不會在邊界炸掉。
 3. **Agent 化**——把這些動作包成 **MCP 工具鏈**（[`mcp_server_skeleton.py`](./mcp_server_skeleton.py)），讓任何支援 MCP 的 Agent 能用一句自然語言指令，落地成一張真的、可上線的表單。
 
+### 架構
+
+```mermaid
+flowchart LR
+    Agent["AI Agent<br/>（例如 Claude）"]
+    MCP["MCP server<br/>（eip-form-mcp）"]
+    Client["API client<br/>單一認證 choke point"]
+    Sys["無文件的<br/>BPM 表單系統"]
+
+    Agent -->|"自然語言指令"| MCP
+    MCP -->|"form_create / read / update<br/>deploy / clone / list"| Client
+    Client -->|"簽章請求"| Sys
+    Sys -.->|"以執行結果驗證"| Client
+    Client -.-> MCP
+    MCP -.-> Agent
+```
+
+兩個想法撐起整個設計：**單一認證 choke point**（每個動作都只是「一支簽章函式」的薄包裝）、**以執行結果驗證**（寫入要等它的效果被執行確認，才算「完成」）。
+
 ### 6 個核心工具
 
 | 工具 | 功能 |
@@ -118,6 +182,32 @@ The skeleton runs against an in-memory mock backend — no live system required.
 | `form_clone`  | 以既有表單為範本複製 |
 
 同樣的模式可延伸到資料來源子系統（列出／讀取／建立）。
+
+### 範例：Agent 建一張表單
+
+> **指令：**《把我們的標準審批範本複製成一張請假單，加上事由和天數欄位，然後部署。》
+
+Agent 把這一句翻成一串工具呼叫：
+
+1. `form_clone` — 複製標準範本
+2. `form_update` — 加請假專屬欄位
+3. `form_deploy` — 上線
+
+一句指令 → 一張部署好的表單，Agent 全程沒碰後台 UI。對 mock 後端端到端跑：
+
+```bash
+python examples/demo.py
+```
+
+### 現場筆記：逆向一個無文件系統
+
+可遷移的部分——系統細節抽掉了，工程判斷留著：
+
+- **找到那個能打開整片介面的 choke point。** 系統每個請求都用 client 端自算的 token 簽章。一旦定位並重現它，每個 API 動作都只是「單一簽章函式」的薄包裝。逆向最高槓桿的一步是找 choke point，不是一個個磨 endpoint。
+- **信執行結果，別信狀態碼。** 「儲存」可能回 `200 OK` 卻什麼都沒做——UI 顯示的值和引擎真正執行的值存在不同地方。所以我每次寫入都用執行結果驗證。在無文件系統裡，它給你的成功訊號可能是假的。
+- **實捕協定，絕不假設。** 我假設物件 ID 可以 client 端自生，結果不行——自生的 ID 永遠路由不到。無文件協定唯一的 oracle 是逐位元組對齊的真實流量。
+- **自動化不可逆操作前先上護欄。** 有些物件能建不能刪。所以：拋棄式測試物件、每次寫入先 dry-run 預覽、任何建立前加確認門——在放手自動化**之前**就建好。
+- **方法論能被別人重現才算數。** 我讓一個冷啟 agent 只靠我的筆記重建整個整合——兩次、全程禁讀我的解答——來證明「方法」本身完整，不只是結果。（跟我做 eval 的球員兼裁判紀律同源。）
 
 ### 為什麼對準「AI Agent Engineer」
 
